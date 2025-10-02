@@ -351,8 +351,8 @@ export class PrizeService {
     // Flatten data to include winner details
     const flatData = [];
     for (const prize of prizes) {
-      if (prize.plays && prize.plays.length > 0) {
-        for (const play of prize.plays) {
+      if ((prize as any).plays && (prize as any).plays.length > 0) {
+        for (const play of (prize as any).plays) {
           flatData.push({
             prizeId: prize.id,
             prizeName: prize.name,

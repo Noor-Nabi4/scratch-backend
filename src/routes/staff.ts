@@ -52,7 +52,7 @@ router.post('/play/:playId/redeem', authenticate, requireStaff, async (req: Auth
     const { playId } = req.params;
     const { notes } = req.body;
 
-    const play = await playService.redeemPlay(playId, req.user!.name || req.user!.email, notes);
+    const play = await playService.redeemPlay(playId, req.user!.email, notes);
 
     res.json({
       success: true,

@@ -191,7 +191,7 @@ export class PlayService {
     // If selected result is out of stock, fall back to "No Prize" result
     let finalResultType = selectedResultType;
     if (selectedResultType.isPrize && !hasStock) {
-      const noPrizeResult = resultTypes.find(rt => !rt.isPrize);
+      const noPrizeResult = resultTypes.find((rt: any) => !rt.isPrize);
       if (noPrizeResult) {
         finalResultType = noPrizeResult;
       }
