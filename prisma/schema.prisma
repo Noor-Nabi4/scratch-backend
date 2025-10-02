@@ -1,0 +1,103 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Token {
+  id        String   @id @default(uuid())
+  code      String   @unique // QR code content
+  qrCodeUrl String?  // URL to QR code image if stored
+  metadata  Json?    // Additional metadata like batch info
+  isUsed    Boolean  @default(false)
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+  play      Play?
+
+  @@map("tokens")
+}
+
+model Play {
+  id           String     @id @default(uuid())
+  tokenId      String     @unique
+  firstName    String
+  lastName     String
+  phone        String
+  email        String     // Required for notifications
+  age          Int
+  resultTypeId String
+  resultCode   String     @unique // Unique code for prize redemption
+  isRedeemed   Boolean    @default(false)
+  redeemedAt   DateTime?
+  redeemedBy   String?    // Staff member who processed redemption
+  ip           String?
+  userAgent    String?
+  emailSent    Boolean    @default(false)
+  emailSentAt  DateTime?
+  createdAt    DateTime   @default(now())
+  
+  token      Token      @relation(fields: [tokenId], references: [id])
+  resultType ResultType @relation(fields: [resultTypeId], references: [id])
+
+  @@map("plays")
+}
+
+model ResultType {
+  id               String @id @default(uuid())
+  name             String            // e.g., "Grand Prize", "Consolation Prize", "No Prize"
+  code             String @unique    // e.g., "GRAND", "CONSOL", "NONE"
+  description      String?           // Prize description
+  prizeValue       String?           // Prize value/description
+  weight           Int    @default(1) // Probability weight for random selection
+  stockLimit       Int?              // Maximum number of this prize type
+  distributedCount Int    @default(0) // How many have been distributed
+  redeemedCount    Int    @default(0) // How many have been redeemed
+  isActive         Boolean @default(true)
+  isPrize          Boolean @default(true) // false for "No Prize" results
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  plays Play[]
+
+  @@map("result_types")
+}
+
+model Admin {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         AdminRole @default(ADMIN)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  audits Audit[]
+
+  @@map("admins")
+}
+
+model Audit {
+  id        String   @id @default(uuid())
+  actorId   String
+  action    String
+  details   Json?
+  createdAt DateTime @default(now())
+  
+  actor Admin @relation(fields: [actorId], references: [id])
+
+  @@map("audits")
+}
+
+enum AdminRole {
+  ADMIN
+  STAFF
+}
+
