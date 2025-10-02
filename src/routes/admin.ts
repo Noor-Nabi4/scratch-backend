@@ -1,7 +1,6 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
 import csv from 'csv-parser';
@@ -13,9 +12,9 @@ import { logger } from '../utils/logger';
 import { tokenService } from '../services/tokenService';
 import { prizeService } from '../services/prizeService';
 import { playService } from '../services/playService';
+import { prisma } from '../utils/prisma';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Configure multer for file uploads
 const upload = multer({

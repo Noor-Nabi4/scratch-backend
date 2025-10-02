@@ -1,10 +1,8 @@
-import { PrismaClient } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { createError } from '../middleware/errorHandler';
 import { logger } from '../utils/logger';
 import { emailService } from './emailService';
-
-const prisma = new PrismaClient();
+import { prisma, prismaTransaction } from '../utils/prisma';
 
 export interface PlayClaimRequest {
   token: string;
@@ -34,7 +32,8 @@ export class PlayService {
   async claimTokenAndPlay(request: PlayClaimRequest): Promise<PlayResult> {
     const { token, ip, userAgent, acceptTerms, ...playerData } = request;
 
-    return await prisma.$transaction(async (tx: any) => {
+    // First, handle the database transaction (fast operations only)
+    const playResult = await prismaTransaction(async (tx: any) => {
       // Find and lock the token for update
       const tokenRecord = await tx.token.findUnique({
         where: { code: token },
@@ -100,33 +99,6 @@ export class PlayService {
         });
       }
 
-      // Send email notification
-      let emailSent = false;
-      try {
-        await emailService.sendResultEmail({
-          to: playerData.email,
-          firstName: playerData.firstName,
-          resultCode,
-          prizeType: result.prizeType,
-          prizeValue: result.prizeValue,
-          description: result.description,
-          isWinner: result.isWinner
-        });
-        
-        // Update play record to mark email as sent
-        await tx.play.update({
-          where: { id: play.id },
-          data: {
-            emailSent: true,
-            emailSentAt: new Date()
-          }
-        });
-        
-        emailSent = true;
-      } catch (error) {
-        logger.error('Failed to send result email', { error, playId: play.id });
-      }
-
       logger.info('Play created successfully', {
         playId: play.id,
         tokenId: tokenRecord.id,
@@ -142,10 +114,42 @@ export class PlayService {
           description: result.description,
           isWinner: result.isWinner,
           resultCode
-        },
-        emailSent
+        }
       };
     });
+
+    // Now handle email sending outside the transaction (async, non-blocking)
+    let emailSent = false;
+    try {
+      await emailService.sendResultEmail({
+        to: playerData.email,
+        firstName: playerData.firstName,
+        resultCode: playResult.result.resultCode,
+        prizeType: playResult.result.prizeType,
+        prizeValue: playResult.result.prizeValue,
+        description: playResult.result.description,
+        isWinner: playResult.result.isWinner
+      });
+      
+      // Update play record to mark email as sent (separate transaction)
+      await prisma.play.update({
+        where: { id: playResult.playId },
+        data: {
+          emailSent: true,
+          emailSentAt: new Date()
+        }
+      });
+      
+      emailSent = true;
+    } catch (error) {
+      logger.error('Failed to send result email', { error, playId: playResult.playId });
+      // Don't throw error - email failure shouldn't fail the entire play operation
+    }
+
+    return {
+      ...playResult,
+      emailSent
+    };
   }
 
   private async determineResult(tx: any): Promise<{
@@ -274,7 +278,7 @@ export class PlayService {
   }
 
   async redeemPlay(playId: string, redeemedBy: string, notes?: string) {
-    return await prisma.$transaction(async (tx: any) => {
+    return await prismaTransaction(async (tx: any) => {
       const play = await tx.play.findUnique({
         where: { id: playId },
         include: { resultType: true }

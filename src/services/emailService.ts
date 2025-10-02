@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { logger } from '../utils/logger';
+import { createError } from '../middleware/errorHandler';
 
 interface EmailConfig {
   to: string;
@@ -11,61 +12,280 @@ interface EmailConfig {
   isWinner: boolean;
 }
 
+interface EmailServiceHealth {
+  status: 'healthy' | 'unhealthy' | 'degraded';
+  lastError?: string;
+  lastSuccessfulSend?: Date;
+  totalSent: number;
+  totalFailed: number;
+}
+
 class EmailService {
-  private transporter: nodemailer.Transporter;
+  private transporter!: nodemailer.Transporter;
+  private isConfigured: boolean = false;
+  private health: EmailServiceHealth = {
+    status: 'healthy',
+    totalSent: 0,
+    totalFailed: 0
+  };
 
   constructor() {
-    this.transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: false, // true for 465, false for other ports
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-    });
+    this.initializeTransporter();
+  }
+
+  private initializeTransporter() {
+    try {
+      // Validate required environment variables
+      if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+        logger.warn('Email service not configured - missing SMTP environment variables');
+        this.isConfigured = false;
+        this.health.status = 'unhealthy';
+        this.health.lastError = 'Missing SMTP configuration';
+        return;
+      }
+
+      this.transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT || '587'),
+        secure: process.env.SMTP_PORT === '465', // true for 465, false for other ports
+        connectionTimeout: 10000, // 10 seconds
+        greetingTimeout: 5000,    // 5 seconds
+        socketTimeout: 15000,     // 15 seconds
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+        pool: true, // Use connection pooling
+        maxConnections: 5,
+        maxMessages: 100,
+        rateLimit: 10, // Max 10 emails per second
+      });
+
+      this.isConfigured = true;
+      this.health.status = 'healthy';
+      
+      // Test the connection
+      this.testConnection();
+      
+      logger.info('Email service initialized successfully');
+    } catch (error) {
+      logger.error('Failed to initialize email service', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      this.isConfigured = false;
+      this.health.status = 'unhealthy';
+      this.health.lastError = error instanceof Error ? error.message : 'Unknown error';
+    }
+  }
+
+  private async testConnection() {
+    if (!this.isConfigured) return;
+
+    try {
+      await this.transporter.verify();
+      logger.info('Email service connection verified');
+      this.health.status = 'healthy';
+      this.health.lastError = undefined;
+    } catch (error) {
+      logger.error('Email service connection test failed', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      this.health.status = 'degraded';
+      this.health.lastError = error instanceof Error ? error.message : 'Unknown error';
+    }
+  }
+
+  public getHealth(): EmailServiceHealth {
+    return { ...this.health };
   }
 
   async sendResultEmail(config: EmailConfig): Promise<void> {
     const { to, firstName, resultCode, prizeType, prizeValue, description, isWinner } = config;
 
-    const subject = isWinner 
-      ? `🎉 Congratulations! You've won: ${prizeType}`
-      : `Thank you for playing!`;
-
-    const htmlContent = this.generateEmailHTML({
-      firstName,
-      resultCode,
-      prizeType,
-      prizeValue,
-      description,
-      isWinner
-    });
-
-    const textContent = this.generateEmailText({
-      firstName,
-      resultCode,
-      prizeType,
-      prizeValue,
-      description,
-      isWinner
-    });
-
-    const mailOptions = {
-      from: `"${process.env.FROM_NAME}" <${process.env.FROM_EMAIL}>`,
-      to,
-      subject,
-      text: textContent,
-      html: htmlContent,
-    };
-
-    try {
-      await this.transporter.sendMail(mailOptions);
-      logger.info('Result email sent successfully', { to, resultCode });
-    } catch (error) {
-      logger.error('Failed to send result email', { error, to, resultCode });
+    // Check if email service is configured
+    if (!this.isConfigured) {
+      const error = createError('Email service not configured', 503, 'EMAIL_SERVICE_NOT_CONFIGURED');
+      this.health.totalFailed++;
       throw error;
     }
+
+    // Validate email address
+    if (!this.isValidEmail(to)) {
+      const error = createError(`Invalid email address: ${to}`, 400, 'INVALID_EMAIL_ADDRESS');
+      this.health.totalFailed++;
+      throw error;
+    }
+
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const subject = isWinner 
+          ? `🎉 Congratulations! You've won: ${prizeType}`
+          : `Thank you for playing!`;
+
+        const htmlContent = this.generateEmailHTML({
+          firstName,
+          resultCode,
+          prizeType,
+          prizeValue,
+          description,
+          isWinner
+        });
+
+        const textContent = this.generateEmailText({
+          firstName,
+          resultCode,
+          prizeType,
+          prizeValue,
+          description,
+          isWinner
+        });
+
+        const mailOptions = {
+          from: `"${process.env.FROM_NAME || 'Scratch & Win'}" <${process.env.FROM_EMAIL || process.env.SMTP_USER}>`,
+          to,
+          subject,
+          text: textContent,
+          html: htmlContent,
+          headers: {
+            'X-Priority': '3',
+            'X-MSMail-Priority': 'Normal',
+            'X-Mailer': 'Scratch & Win Game',
+          },
+        };
+
+        const info = await this.transporter.sendMail(mailOptions);
+        
+        // Success
+        this.health.totalSent++;
+        this.health.lastSuccessfulSend = new Date();
+        this.health.status = 'healthy';
+        this.health.lastError = undefined;
+
+        logger.info('Result email sent successfully', { 
+          to, 
+          resultCode, 
+          messageId: info.messageId,
+          attempt 
+        });
+        
+        return; // Success, exit retry loop
+
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('Unknown email error');
+        
+        logger.warn(`Email send attempt ${attempt} failed`, {
+          to,
+          resultCode,
+          attempt,
+          maxRetries,
+          error: lastError.message
+        });
+
+        // Handle specific email errors
+        if (this.isTemporaryError(lastError)) {
+          if (attempt < maxRetries) {
+            // Wait before retry (exponential backoff)
+            const delay = Math.pow(2, attempt - 1) * 1000; // 1s, 2s, 4s
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+        } else {
+          // Permanent error, don't retry
+          break;
+        }
+      }
+    }
+
+    // All retries failed
+    this.health.totalFailed++;
+    this.health.lastError = lastError?.message;
+    
+    if (this.health.totalFailed > this.health.totalSent * 0.5) {
+      this.health.status = 'degraded';
+    }
+
+    logger.error('Failed to send result email after all retries', { 
+      to, 
+      resultCode, 
+      error: lastError?.message,
+      attempts: maxRetries 
+    });
+
+    // Determine error type and throw appropriate error
+    if (lastError) {
+      if (this.isAuthenticationError(lastError)) {
+        throw createError('Email authentication failed', 503, 'EMAIL_AUTH_FAILED');
+      } else if (this.isNetworkError(lastError)) {
+        throw createError('Email service temporarily unavailable', 503, 'EMAIL_SERVICE_UNAVAILABLE');
+      } else if (this.isRateLimitError(lastError)) {
+        throw createError('Email rate limit exceeded', 429, 'EMAIL_RATE_LIMIT_EXCEEDED');
+      } else {
+        throw createError(`Email delivery failed: ${lastError.message}`, 503, 'EMAIL_DELIVERY_FAILED');
+      }
+    }
+
+    throw createError('Email delivery failed', 503, 'EMAIL_DELIVERY_FAILED');
+  }
+
+  private isValidEmail(email: string): boolean {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  }
+
+  private isTemporaryError(error: Error): boolean {
+    const temporaryErrors = [
+      'ETIMEDOUT',
+      'ECONNRESET',
+      'ENOTFOUND',
+      'ECONNREFUSED',
+      'EHOSTUNREACH',
+      'ENETUNREACH',
+      'EAI_AGAIN'
+    ];
+    
+    return temporaryErrors.some(code => 
+      error.message.includes(code) || 
+      (error as any).code === code
+    );
+  }
+
+  private isAuthenticationError(error: Error): boolean {
+    const authErrors = [
+      'Invalid login',
+      'Authentication failed',
+      'Username and Password not accepted',
+      'EAUTH'
+    ];
+    
+    return authErrors.some(msg => 
+      error.message.includes(msg) || 
+      (error as any).code === 'EAUTH'
+    );
+  }
+
+  private isNetworkError(error: Error): boolean {
+    const networkErrors = [
+      'ENOTFOUND',
+      'ECONNREFUSED',
+      'EHOSTUNREACH',
+      'ENETUNREACH',
+      'ETIMEDOUT',
+      'ECONNRESET'
+    ];
+    
+    return networkErrors.some(code => 
+      error.message.includes(code) || 
+      (error as any).code === code
+    );
+  }
+
+  private isRateLimitError(error: Error): boolean {
+    return error.message.includes('rate limit') || 
+           error.message.includes('too many') ||
+           (error as any).responseCode === 421;
   }
 
   private generateEmailHTML(config: {
