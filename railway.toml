@@ -1,0 +1,23 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+[build.nixpacksConfig]
+# Optimize build for faster compilation
+buildCommand = "npm run build"
+startCommand = "npm start"
+
+# Environment variables for build optimization
+[build.nixpacksConfig.env]
+NODE_ENV = "production"
+NPM_CONFIG_PRODUCTION = "false"
+SKIP_ENV_VALIDATION = "true"
+
+# Build cache configuration
+[build.nixpacksConfig.cache]
+directories = ["node_modules", ".npm"]

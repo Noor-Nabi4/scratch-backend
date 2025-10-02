@@ -5,7 +5,9 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "npm run clean && npm run db:generate && tsc",
+    "build:prod": "npm run clean && npm run db:generate && tsc --build --verbose",
+    "clean": "rimraf dist",
     "start": "node dist/index.js",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -15,7 +17,8 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx src/scripts/seed.ts",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "postinstall": "npm run db:generate"
   },
   "dependencies": {
     "@prisma/client": "^5.7.1",
@@ -48,7 +51,8 @@
     "ts-jest": "^29.1.1",
     "prisma": "^5.7.1",
     "supertest": "^6.3.3",
-    "@types/supertest": "^2.0.16"
+    "@types/supertest": "^2.0.16",
+    "rimraf": "^5.0.5"
   },
   "jest": {
     "preset": "ts-jest",
