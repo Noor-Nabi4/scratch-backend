@@ -121,7 +121,7 @@ export class PlayService {
     // Now handle email sending outside the transaction (async, non-blocking)
     let emailSent = false;
     try {
-      await emailService.sendResultEmail({
+      /* await emailService.sendResultEmail({
         to: playerData.email,
         firstName: playerData.firstName,
         resultCode: playResult.result.resultCode,
@@ -129,7 +129,7 @@ export class PlayService {
         prizeValue: playResult.result.prizeValue,
         description: playResult.result.description,
         isWinner: playResult.result.isWinner
-      });
+      }); */
       
       // Update play record to mark email as sent (separate transaction)
       await prisma.play.update({
